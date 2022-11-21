@@ -132,3 +132,6 @@ dmypy.json
 
 # Ignore email credentials
 *email.config
+
+# Zipped files
+*.zip
