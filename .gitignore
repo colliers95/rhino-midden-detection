@@ -128,4 +128,10 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-*/Tiffs
+*Tiffs
+*Data
+
+# Ignore email credentials
+*email.config
+
+*.zip
