@@ -137,3 +137,5 @@ dmypy.json
 
 # Zipped files
 *.zip
+
+*.DS_STORE
