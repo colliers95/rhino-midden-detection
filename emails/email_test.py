@@ -24,7 +24,7 @@ with open("email.config") as config:
 sender_email = creds.get("sender_email")
 sender_password = creds.get("sender_password")
 receiver_emails = [
-    creds.get("sender_email"),
+    creds.get("sender_email"),  # coauthor_email
 ]
 
 
@@ -60,10 +60,12 @@ class SendReceiveEmail:
         email_message.add_header("Subject", self.subject_line)
 
         # Create text and HTML bodies for email
-        text_part = MIMEText(self.body_text, "plain")
+        top_text_part = MIMEText(self.top_body_text, "plain")
+        bottom_text_part = MIMEText(self.bottom_body_text, "plain")
         html_part = MIMEText(self.body_html, "html")
-        email_message.attach(text_part)
+        email_message.attach(top_text_part)
         email_message.attach(html_part)
+        email_message.attach(bottom_text_part)
 
         if not all([path == "None" for path in image_paths]):
             # Create zipfile attachment full of imaes
@@ -100,42 +102,25 @@ class SendReceiveEmail:
             self.img_indices
         )
         textheader1 = "Please check the attached images to verify whether they contain middens. There is a single thermal and rgb tile for each index.\n"
-        textheader2 = "Please send your response by clicking the following, editing nothing except for the yes/no answers "
+        textheader2 = "Please send your response by clicking this "
+        textheader3 = ", editing nothing except for the yes/no answers\n"
         # Store creation time to find email later
         self.create_time = datetime.now().strftime("%m-%d-%y %H:%M:%S")
         self.reply_header = (
             "REPLY: " + ", ".join(self.img_indices) + " created " + self.create_time
         )
-        reply_text = "\n".join([idx_str + ": no" for idx_str in img_indices])
+        reply_text = "\n\n".join([idx_str + ": no" for idx_str in img_indices])
         self.body_html = '<a href="mailto:{0}?subject={1}&body={2}">link</a>'.format(
             self.from_email, self.reply_header, reply_text
         )
-        self.body_text = textheader1 + textheader2
+        self.top_body_text = textheader1 + textheader2
+        self.bottom_body_text = textheader3
         print("Email sections created")
 
     def read_email(self):
         # Connect and login to IMAP mail server
         imap_server = imaplib.IMAP4_SSL(host="imap.gmail.com")
         imap_server.login(self.from_email, self.from_password)
-
-        # # List mailboxes (folders)
-        # response_code, folders = imap_server.list()
-        # print(response_code)  # OK
-        # print('Available folders(mailboxes) to select:')
-        # for folder_details_raw in folders:
-        #     folder_details = folder_details_raw.decode().split()
-        #     print(f'- {folder_details[-1]}')
-
-        # # Create, rename, and delete mailboxes (folders)
-        # # This format is the one my email provider interserver.net uses
-        # # Create a mailbox
-        # response_code, response_details = imap_server.create('INBOX.myfavorites')
-        # print(response_code)  # `OK` on success or `NO` on failure
-        # print(response_details)  # Create completed/Mailbox already exists
-        # # Rename a mailbox
-        # imap_server.rename('INBOX.myfavorites', 'INBOX.faves')
-        # # Delete a mailbox
-        # imap_server.delete('INBOX.faves')
 
         # Choose the mailbox (folder) to search
         # Case sensitive!
@@ -165,14 +150,20 @@ class SendReceiveEmail:
         response_code, message_data = imap_server.fetch(message_numbers[0], "(RFC822)")
         print(f"Fetch response for message {message_numbers[0]}: {response_code}")
         print(f"Raw email data:\n{message_data}")
-        msg = message_from_bytes(message_data[1][1], policy=policy.default)
+
+        try:
+            msg = message_from_bytes(
+                message_data[1][1], policy=policy.default
+            )  # Google mail
+        except IndexError:
+            msg = message_from_bytes(
+                message_data[0][1], policy=policy.default
+            )  # Apple mail
         body = msg.get_body(("plain",))
         body = body.get_content()
         body_lines = body.split("\n")
-        body_els = [el.split(":") for el in body_lines]
-        answers = {
-            lst[0]: lst[1].strip().replace("\r", "") for lst in body_els if lst != [""]
-        }
+        body_els = [el.replace("\r", "").split(":") for el in body_lines]
+        answers = {lst[0]: lst[1].strip() for lst in body_els if lst != [""]}
         print(f"Extracted email body:\n{body}")
 
         self.email_answers = answers
@@ -199,4 +190,5 @@ if __name__ == "__main__":
     mail.send_email()
     mail.read_email()
     email_answers = mail.get_email_answers()
+
     print(email_answers)
