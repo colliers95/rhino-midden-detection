@@ -6,26 +6,14 @@ from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
-from email import encoders, message_from_string, message_from_bytes, policy
-from typing import List
+from email import encoders, message_from_bytes, policy
+from typing import List, OrderedDict
 from ssl import create_default_context
 import os
 import zipfile
 import imaplib
-
-# Get credentials
-with open("email.config") as config:
-    creds = {
-        line.strip().split("|")[0]: line.strip().split("|")[1]
-        for line in config.readlines()
-    }
-
-# Update to change sender (unlikely) and target (likely)
-sender_email = creds.get("sender_email")
-sender_password = creds.get("sender_password")
-receiver_emails = [
-    creds.get("coauthor_email"),  # coauthor_email
-]
+from collections import OrderedDict
+import numpy as np
 
 
 class SendReceiveEmail:
@@ -46,6 +34,11 @@ class SendReceiveEmail:
         self.img_indices = img_indices
         self.image_paths = image_paths
         self.email_answers = {}
+
+    @staticmethod
+    def convert_to_labels(email_answers: OrderedDict) -> np.ndarray:
+        answers = list(email_answers.values())
+        return np.array([1 if ("y" in ans.lower()) else 0 if ("n" in ans.lower()) else np.nan for ans in answers])
 
     def get_email_answers(self):
         return self.email_answers
@@ -101,7 +94,7 @@ class SendReceiveEmail:
         self.subject_line = "IMPORTANT: MIDDEN VERIFICATION FOR " + ", ".join(
             self.img_indices
         )
-        textheader1 = "Please check the attached images to verify whether they contain middens. There is a single thermal and rgb tile for each index.\n"
+        textheader1 = "Please check the attached images to verify whether they contain middens. There is a single thermal and RGB tile for each index.\n"
         textheader2 = "Please send your response by clicking this "
         textheader3 = ", editing nothing except for the yes/no answers\n"
         # Store creation time to find email later
@@ -184,16 +177,30 @@ class SendReceiveEmail:
         answers = {lst[0]: lst[1].strip() for lst in body_els if lst != [""]}
         print(f"Extracted email body:\n{body}")
 
-        self.email_answers = answers
+        self.email_answers = OrderedDict(answers)
 
         imap_server.close()
         imap_server.logout()
 
     def read_email(self):
         self._read_email(self.reply_header)
+        
 
 
 if __name__ == "__main__":
+    # Get credentials
+    with open("AL_email.config") as config:
+        creds = {
+            line.strip().split("|")[0]: line.strip().split("|")[1]
+            for line in config.readlines()
+        }
+
+    # Update to change sender (unlikely) and target (likely)
+    sender_email = creds.get("sender_email")
+    sender_password = creds.get("sender_password")
+    receiver_emails = [
+        creds.get("sender_email"),  # coauthor_email
+    ]
     # Images to send decided by the network
     img_indices = ["001", "002"]
     image_paths = [
@@ -212,5 +219,5 @@ if __name__ == "__main__":
     # mail._read_email("REPLY: 001, 002 created 11-28-22 11:44:30")
     mail.read_email()
     email_answers = mail.get_email_answers()
-
+    labels = SendReceiveEmail.convert_to_labels(email_answers)
     print(email_answers)

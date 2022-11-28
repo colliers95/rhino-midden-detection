@@ -8,9 +8,11 @@ from torch.utils.data import random_split, DataLoader
 from torchsummary import summary
 from math import ceil
 from sys import argv
+from emails.AL_email import SendReceiveEmail
+from matplotlib.pyplot import figure, imshow, xlabel, ylabel, colorbar, show, savefig
 
 class CNN:
-    def __init__(self, images, labels, batchSize=8, epochs=30, learningRate=0.0001, learningMode='passive', trial=''):
+    def __init__(self, images, labels, batchSize=8, epochs=30, learningRate=0.0001, learningMode='passive', trial='', sender_email = "", sender_password="", receiver_emails=[]):
         self.model = None
         self.images = load(images)
         self.labels = load(labels)
@@ -51,6 +53,9 @@ class CNN:
         self.class1Accuracy = 0
         self.precision = 0
         self.recall = 0
+        self.sender_email = sender_email
+        self.sender_password = sender_password
+        self.receiver_emails = receiver_emails
 
         self.useVGG16()
         self.preprocessData()
@@ -62,6 +67,26 @@ class CNN:
         elif self.learningMode == 'active':
             self.activeTrain()
         self.test()
+
+    @staticmethod
+    def plotImage(imageData, imageryType, title='Figure', show=False):
+        assert imageryType in ['Thermal', 'RGB']
+        figure(title, dpi=150)
+
+        if imageryType == 'Thermal':
+            imagePlot = imshow(imageData)
+            imagePlot.set_cmap('plasma')
+            cb = colorbar()
+            cb.set_label('Pixel value')
+
+        elif imageryType == 'RGB':
+            imshow(imageData)
+
+        xlabel('X (pixels)')
+        ylabel('Y (pixels)')
+        savefig('Images/' + imageryType + 'ImagesTemp/' + title + '.png')
+        if show:
+            show()
 
     def useVGG16(self):
         myDevice = device('cuda' if cuda.is_available() else 'cpu')
@@ -150,6 +175,41 @@ class CNN:
                 break
         
         print('Finished Training')
+
+    def hand_label_images(self, ImageIndices, images_to_send):
+        """Get hand-labelled results from modelled-defined images
+
+        Parameters
+        ----------
+        ImageIndices : np.ndarray
+                    The indices of the model-selected images within the set of training data
+        images_to_send : np.ndarray
+                    The selected images in array form
+        
+        Returns
+        ----------
+        hand_labels : np.ndarray
+                    An ordered array of labels indicating whether the associated images contain middens
+        """
+        image_paths = []
+        img_indices = []
+        for idx, img in zip(ImageIndices, images_to_send):
+            # Make and save plot
+            title = "tile_{}_thermal".format(str(idx))
+            CNN.plotImage(img, imageryType="Thermal", title=title)
+            image_paths = image_paths.append('Images/ThermalImagesTemp/' + title + '.png')
+            img_indices = img_indices.append(str(idx))
+        
+        mail = SendReceiveEmail(
+            self.sender_email, self.sender_password, self.receiver_emails, img_indices, image_paths
+        )
+        mail.create_email_parts()
+        mail.send_email()
+        mail.read_email()
+        email_answers = mail.get_email_answers() # returns an OrderedDict
+        hand_labels = SendReceiveEmail.convert_to_labels(email_answers) # returns a numpy array of ints
+
+        return hand_labels
     
     def activeTrain(self):
         unlabeledImages = self.trainingImages # all the training images start out unlabeled
@@ -162,9 +222,15 @@ class CNN:
             return sorted(range(len(maxPixelVals)), key=lambda sub:maxPixelVals[sub])[-int(around((1-fraction)*len(maxPixelVals))):]
         
         trainingImageIndices = sample(brightestIndices(0.99), self.batchSize) # randomly picking a batch among the images with the highest max pixel values
-        trainingLoader = DataLoader(list(zip(take(unlabeledImages, trainingImageIndices, axis=0),take(imageLabels, trainingImageIndices, axis=0))), batch_size=1, shuffle=True, num_workers=1) # select the images corresponding to the above indices
+        
+        # With indices decided, create thermal plots and send to user (RGB to come later)
+        imgs_to_send = take(unlabeledImages, trainingImageIndices, axis=0)
 
-        def removeFromUnlabeledImgs():
+        hand_labels = self.hand_label_images(trainingImageIndices, )
+
+        trainingLoader = DataLoader(list(zip(imgs_to_send,hand_labels)), batch_size=1, shuffle=True, num_workers=1) # select the images corresponding to the above indices
+
+        def removeFromUnlabeledImgs():  
             for index in sorted(trainingImageIndices, reverse=True):
                 delete(unlabeledImages,index) # remove image that will be used for training from the unlabeled set
                 delete(imageLabels,index)
@@ -180,8 +246,8 @@ class CNN:
                 sigmoidOutput = self.model(take(unlabeledImages,testImageIndices)).data
             trainingImageIndices = sorted(range(len(sigmoidOutput)), key=lambda sub:sigmoidOutput[sub])[-self.batchSize:]
             nextImages = take(unlabeledImages, trainingImageIndices, axis=0)
-            nextLabels = take(imageLabels, trainingImageIndices, axis=0)
-            trainingLoader = append(trainingLoader,list(zip(nextImages,nextLabels)))
+            new_hand_labels = self.hand_label_images(trainingImageIndices, nextImages)
+            trainingLoader = append(trainingLoader,list(zip(nextImages,new_hand_labels)))
             removeFromUnlabeledImgs()
             labelingBudget -= self.batchSize
             e = min([2*e,0.5])
@@ -227,7 +293,21 @@ class CNN:
         print(f'Recall = {self.recall}') # fraction of images with middens classified as having middens
         save('Results/Test Results'+self.trial, array([self.accuracy, self.class0Accuracy, self.class1Accuracy, self.precision, self.recall]))
 
-ThermalCNN = CNN('Data/TrainingImagesThermal.npy', 'Data/TrainingLabelsThermal.npy', batchSize=8, epochs=int(argv[2]), learningRate=0.0001, learningMode=argv[1])
+# Get credentials
+with open("./emails/email.config") as config:
+    creds = {
+        line.strip().split("|")[0]: line.strip().split("|")[1]
+        for line in config.readlines()
+    }
+
+# Update to change sender (unlikely) and target (likely)
+sender_email = creds.get("sender_email")
+sender_password = creds.get("sender_password")
+receiver_emails = [
+    creds.get("coauthor_email"),  # coauthor_email
+]
+
+ThermalCNN = CNN('Data/TrainingImagesThermal.npy', 'Data/TrainingLabelsThermal.npy', batchSize=8, epochs=int(argv[2]), learningRate=0.0001, learningMode=argv[1], sender_email=sender_email, sender_password=sender_password, receiver_emails=receiver_emails)
 #ThermalCNN = CNN('Data/TrainingImagesCIFAR.npy', 'Data/TrainingLabelsCIFAR.npy', batchSize=8, epochs=int(argv[2]), learningRate=0.0001, learningMode=argv[1])
 
 # for i in range(1,6):
