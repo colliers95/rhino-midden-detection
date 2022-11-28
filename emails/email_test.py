@@ -24,7 +24,7 @@ with open("email.config") as config:
 sender_email = creds.get("sender_email")
 sender_password = creds.get("sender_password")
 receiver_emails = [
-    creds.get("sender_email"),  # coauthor_email
+    creds.get("coauthor_email"),  # coauthor_email
 ]
 
 
@@ -109,7 +109,7 @@ class SendReceiveEmail:
         self.reply_header = (
             "REPLY: " + ", ".join(self.img_indices) + " created " + self.create_time
         )
-        reply_text = "\n\n".join([idx_str + ": no" for idx_str in img_indices])
+        reply_text = "%0D%0A".join([idx_str + ": no" for idx_str in img_indices])
         self.body_html = '<a href="mailto:{0}?subject={1}&body={2}">link</a>'.format(
             self.from_email, self.reply_header, reply_text
         )
@@ -117,7 +117,7 @@ class SendReceiveEmail:
         self.bottom_body_text = textheader3
         print("Email sections created")
 
-    def read_email(self):
+    def _read_email(self, reply_header):
         # Connect and login to IMAP mail server
         imap_server = imaplib.IMAP4_SSL(host="imap.gmail.com")
         imap_server.login(self.from_email, self.from_password)
@@ -131,7 +131,7 @@ class SendReceiveEmail:
         # Then you can fetch specific messages with the IDs.
         # Search filters are explained in the RFC at:
         # https://tools.ietf.org/html/rfc3501#section-6.4.4
-        search_criteria = 'HEADER Subject "{}"'.format(self.reply_header)
+        search_criteria = 'HEADER Subject "{}"'.format(reply_header)
         charset = None  # All
         message_numbers = []
         while not message_numbers:  # Empty list if no replies found
@@ -150,17 +150,35 @@ class SendReceiveEmail:
         response_code, message_data = imap_server.fetch(message_numbers[0], "(RFC822)")
         print(f"Fetch response for message {message_numbers[0]}: {response_code}")
         print(f"Raw email data:\n{message_data}")
+        # Using https://www.thepythoncode.com/article/reading-emails-in-python
+        for response in message_data:
+            if isinstance(response, tuple):
+                # parse a bytes email into a message object
+                msg = message_from_bytes(response[1], policy=policy.default)
+                if msg.is_multipart():
+                    # iterate over email parts
+                    for part in msg.walk():
+                        # extract content type of email
+                        content_type = part.get_content_type()
+                        content_disposition = str(part.get("Content-Disposition"))
+                        try:
+                            # get the email body
+                            body = part.get_payload(decode=True).decode()
+                        except:
+                            pass
+                        if (
+                            content_type == "text/plain"
+                            and "attachment" not in content_disposition
+                        ):
+                            # actual body text found
+                            break
+                else:
+                    # extract content type of email
+                    content_type = msg.get_content_type()
+                    if content_type == "text/plain":
+                        # get the email body
+                        body = msg.get_payload(decode=True).decode()
 
-        try:
-            msg = message_from_bytes(
-                message_data[1][1], policy=policy.default
-            )  # Google mail
-        except IndexError:
-            msg = message_from_bytes(
-                message_data[0][1], policy=policy.default
-            )  # Apple mail
-        body = msg.get_body(("plain",))
-        body = body.get_content()
         body_lines = body.split("\n")
         body_els = [el.replace("\r", "").split(":") for el in body_lines]
         answers = {lst[0]: lst[1].strip() for lst in body_els if lst != [""]}
@@ -170,6 +188,9 @@ class SendReceiveEmail:
 
         imap_server.close()
         imap_server.logout()
+
+    def read_email(self):
+        self._read_email(self.reply_header)
 
 
 if __name__ == "__main__":
@@ -188,6 +209,7 @@ if __name__ == "__main__":
     )
     mail.create_email_parts()
     mail.send_email()
+    # mail._read_email("REPLY: 001, 002 created 11-28-22 11:44:30")
     mail.read_email()
     email_answers = mail.get_email_answers()
 
