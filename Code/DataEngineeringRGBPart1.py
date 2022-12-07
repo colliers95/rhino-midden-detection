@@ -1,54 +1,36 @@
 ''' Data Engineering by Lucia Gordon & Samuel Collier '''
-from numpy import array, zeros, ma, around, flip, arange, all, sum, amax, amin, uint8, save, where, linspace, any, vstack, hstack, ceil, load, mean, std, append
+from numpy import array, zeros, ma, around, flip, arange, all, sum, amax, amin, uint8, save, where, linspace, any, vstack, hstack, ceil, load
 from matplotlib.pyplot import figure, imshow, xlabel, ylabel, colorbar, show, savefig
+from pandas import read_csv
 from osgeo import gdal
 from random import sample
 from sys import argv
-from scipy import ndimage
 
-class DataEngineering:
-    def __init__(self, orthomosaicPath, middenLocationsPath, imageryType, part=0):
+class DataEngineeringRGBPart1:
+    def __init__(self, orthomosaicPath, middenLocationsPath, imageryType='RGB'):
         self.imageryType = imageryType # Thermal or RGB
-
-        if self.imageryType == 'Thermal' or self.imageryType+str(part) == 'RGB1':
-            self.dataset = gdal.Open(orthomosaicPath)
-            self.orthomosaic = []
-
-        elif self.imageryType+str(part) == 'RGB2':
-            self.orthomosaic = load(orthomosaicPath)
-
+        self.dataset = gdal.Open(orthomosaicPath)
+        self.orthomosaic = []
         self.startCol = 0
         self.endCol = 0
         self.startRow = 0
         self.endRow = 0
-
         if self.imageryType == 'Thermal':
             self.interval = 40 # 20m / 0.5m/pixel = 40 pixels
             self.stride = 10 # 5m / 0.5m/pixel = 10 pixels
-
         elif self.imageryType == 'RGB':
             self.interval = 400
             self.stride = 100
-            
         self.middenCoords = []
         self.middenLocsInOrthomosaic = []
         self.trainingImages = [] # list of 40x40 pixel images cropped from orthomosaic
         self.trainingLabelMatrices = [] # list of (interval,interval) arrays cropped from the full array of midden locations in the orthomosaic
         self.trainingLabels = []
-        self.rotatedImages = []
         self.trainingData = []
 
-        if self.imageryType == 'Thermal' or self.imageryType+str(part) == 'RGB1':
-            self.getPixelValuesFromTiff()
-
+        self.getPixelValuesFromTiff()
         self.plotImage(self.orthomosaic, self.imageryType + ' Orthomosaic')
-
-        if self.imageryType == 'Thermal' or self.imageryType+str(part) == 'RGB1':
-            self.getMiddenLocs(middenLocationsPath)
-        
-        if self.imageryType == 'Thermal' or self.imageryType+str(part) == 'RGB2':
-            self.generateTrainingData()
-            self.showMiddensOnImage()
+        self.getMiddenLocs(middenLocationsPath)
 
     def cropArray(self, matrix):
         startRow = 0
@@ -104,7 +86,8 @@ class DataEngineering:
             self.orthomosaic = imageData[:,:,3] # extracting fourth band, which corresponds to temperature
             orthomosaicMin = amin(ma.masked_less(self.orthomosaic,2000)) # 7638 = min pixel value in orthomosaic
             self.orthomosaic = ma.masked_less(self.orthomosaic-orthomosaicMin,0).filled(0) # shift the pixel values such that the min of the orthomosaic is 0 and set the background pixels to 0
-            self.orthomosaic, self.startRow, _, self.startCol, _ = self.cropArray(self.orthomosaic) # crop out rows and columns that are 0
+            self.orthomosaic = (255/amax(self.orthomosaic)*self.orthomosaic).astype('uint8') # convert to grayscale
+            #self.orthomosaic, self.startRow, _, self.startCol, _ = self.cropArray(self.orthomosaic) # crop out rows and columns that are 0
             newRows = zeros((int(ceil((self.orthomosaic.shape[0]-self.interval)/(self.interval/2+self.stride)))*int(self.interval/2+self.stride)+self.interval-self.orthomosaic.shape[0],self.orthomosaic.shape[1]))
             self.orthomosaic = vstack((self.orthomosaic, newRows))
             newColumns = zeros((self.orthomosaic.shape[0],int(ceil((self.orthomosaic.shape[1]-self.interval)/(self.interval/2+self.stride)))*int(self.interval/2+self.stride)+self.interval-self.orthomosaic.shape[1]))
@@ -132,7 +115,7 @@ class DataEngineering:
             self.orthomosaic = vstack((self.orthomosaic, newRows))
             newColumns = zeros((self.orthomosaic.shape[0],int(ceil((self.orthomosaic.shape[1]-self.interval)/(self.interval/2+self.stride)))*int(self.interval/2+self.stride)+self.interval-self.orthomosaic.shape[1],self.orthomosaic.shape[2]))
             self.orthomosaic = hstack((self.orthomosaic, newColumns)).astype('uint8')
-            save('Data/'+self.imageryType+'Orthomosaic', self.orthomosaic)
+        save('Data/'+self.imageryType+'Orthomosaic', self.orthomosaic)
         print(self.imageryType + ' orthomosaic shape: ' + str(self.orthomosaic.shape))
         
     def plotImage(self, imageData, title='Figure'):
@@ -154,13 +137,12 @@ class DataEngineering:
     
     def getMiddenLocs(self, middenLocationsPath):
         xOrigin, pixelWidth, _, yOrigin, _, pixelHeight = self.dataset.GetGeoTransform()
+        print(self.imageryType + ': ' + str(xOrigin) + ' ' + str(yOrigin) + ' ' + str(pixelWidth) + ' ' + str(pixelHeight))
         self.middenCoords = load(middenLocationsPath).T # in meters
-        print(len(self.middenCoords.T))
         self.middenCoords[0] = (self.middenCoords[0]-xOrigin)/pixelWidth - self.startCol # in pixels
         self.middenCoords[1] = (self.middenCoords[1]-yOrigin)/pixelHeight - self.startRow # in pixels
         self.middenCoords = around(self.middenCoords).astype(int)
         self.middenLocsInOrthomosaic = zeros((self.orthomosaic.shape[0],self.orthomosaic.shape[1])).astype(int)
-
         for index in range(len(self.middenCoords.T)):
             if self.middenCoords.T[index][1] >= self.orthomosaic.shape[0]:
                 print(index, self.middenCoords.T[index])
@@ -169,94 +151,7 @@ class DataEngineering:
 
         for loc in self.middenCoords.T:
             self.middenLocsInOrthomosaic[loc[1],loc[0]] = 1
-
-        print(self.imageryType + ': ' + str(xOrigin) + ' ' + str(yOrigin) + ' ' + str(pixelWidth) + ' ' + str(pixelHeight))
+        save('Data/'+self.imageryType+'MiddenLocsInOrthomosaic', self.middenLocsInOrthomosaic)
         print(self.imageryType + ' num of middens ' + str(sum(self.middenLocsInOrthomosaic)))
-    
-    def normalizeImage(self, image):
-        image -= amin(image) # set minimum to 0
 
-        if amax(image) != 0:
-            image /= amax(image) # set maximum to 1
-
-        image = (image-0.5)/0.5 # set pixel values to be between -1 and 1
-        return image
-
-    def generateTrainingData(self):
-        top = 0
-        bottom = self.stride + self.interval/2 + self.stride
-        
-        while bottom < int(self.orthomosaic.shape[0]):
-            left = 0
-            right = self.stride + self.interval/2 + self.stride
-
-            while right < int(self.orthomosaic.shape[1]):
-                image = self.orthomosaic[int(top):int(bottom),int(left):int(right)].copy()
-
-                if len(image.shape) == 2:
-                    image = self.normalizeImage(image)
-
-                elif len(image.shape) == 3:
-                    normalizedImage = zeros((image.shape))
-                    for band in range(image.shape[0]):
-                        normalizedImage[band,:,:] = self.normalizeImage(image[band,:,:])
-                    image = normalizedImage
-
-                self.trainingImages.append(image)
-                self.trainingLabelMatrices.append(self.middenLocsInOrthomosaic[int(top):int(bottom),int(left):int(right)])
-                left += self.stride + self.interval/2
-                right += self.interval/2 + self.stride
-
-            top += self.stride + self.interval/2
-            bottom += self.interval/2 + self.stride
-
-        for i in flip(arange(len(self.trainingImages))):
-            if all(self.trainingImages[i]==-1):
-                del self.trainingImages[i] # remove images whose entries are all 0
-                del self.trainingLabelMatrices[i] # remove label matrices whose corresponding images have all zeros
-        
-        self.trainingLabels = sum(sum(self.trainingLabelMatrices,axis=1),axis=1) # collapses each label matrix to 1 if there's a 1 in the matrix or 0 otherwise
-        
-        for index in range(len(self.trainingLabels)):
-            if self.trainingLabels[index] > 1:
-                self.trainingLabels[index] = 1
-        
-        originalLabels = self.trainingLabels.copy()
-        for index in range(len(originalLabels)):
-            if originalLabels[index] > 0:
-                self.trainingImages.append(ndimage.rotate(self.trainingImages[index],90))
-                self.trainingImages.append(ndimage.rotate(self.trainingImages[index],180))
-                self.trainingImages.append(ndimage.rotate(self.trainingImages[index],270))
-                self.trainingLabels = append(self.trainingLabels,1)
-                self.trainingLabels = append(self.trainingLabels,1)
-                self.trainingLabels = append(self.trainingLabels,1)
-
-        print('Length of training images = ' + str(array(self.trainingImages).shape))
-        print('Length of training labels = ' + str(len(self.trainingLabels)))
-        print(self.imageryType + ' sum of training labels ' + str(sum(self.trainingLabels)))
-        self.trainingData = array(list(zip(self.trainingImages,self.trainingLabels)),dtype=object) # pairs each training image with its label
-        print(self.imageryType + ' data shape: ' + str(self.trainingData.shape))
-        save('Data/TrainingImages'+self.imageryType, array(self.trainingImages))
-        save('Data/TrainingLabels'+self.imageryType, self.trainingLabels)
-    
-    def showMiddensOnImage(self):
-        middenIndices = where(self.trainingLabels == 1)[0]
-
-        for index in sample(middenIndices.tolist(),10): # look at 10 random images with middens
-        #for index in middenIndices:
-            print(index)
-            figure(self.imageryType + ' Image ' + str(index), dpi=150)
-            image = imshow(self.trainingImages[index])
-            
-            if self.imageryType == 'Thermal':
-                image.set_cmap('plasma')
-                cb = colorbar()
-                cb.set_label('Pixel value')
-            #midden = imshow(ma.masked_less(self.trainingLabelMatrices[index],1))
-            #midden.set_cmap('inferno')
-            xlabel('X (pixels)')
-            ylabel('Y (pixels)')
-            #savefig('Images/' + self.imageryType + 'Images/Image' + str(index) + '.png')
-            show()
-
-Data = DataEngineering(orthomosaicPath='Tiffs/Firestorm3' + argv[1] + '.tif', middenLocationsPath='Data/AllMiddenLocations.npy', imageryType=argv[1])
+Data = DataEngineeringRGBPart1(orthomosaicPath='Tiffs/Firestorm3' + argv[1] + '.tif', middenLocationsPath='Data/AllMiddenLocations.npy', imageryType=argv[1])
